@@ -1,0 +1,51 @@
+{
+  "name": "veliance",
+  "productName": "Veliance",
+  "version": "2.0.0",
+  "description": "Invisible AI overlay for your desktop. Hidden from screen share, driven by hotkeys, powered by your own API key.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --mac --publish never",
+    "pack": "node scripts/pack.js",
+    "pack:intel": "node scripts/pack.js x64",
+    "dmg": "node scripts/pack.js arm64 --dmg && node scripts/pack.js x64 --dmg",
+    "sign": "node scripts/sign.js"
+  },
+  "devDependencies": {
+    "@electron/packager": "^18.4.4",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.veliance.overlay",
+    "productName": "Veliance",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg"
+      ],
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Veliance uses the microphone for live transcription in Listen mode.",
+        "NSScreenCaptureUsageDescription": "Veliance captures your screen so you can ask questions about what is on it.",
+        "LSUIElement": true
+      },
+      "icon": "assets/icon.icns"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "ai.js",
+      "store.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "build/**/*",
+      "scripts/**/*"
+    ]
+  }
+}

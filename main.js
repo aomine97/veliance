@@ -1,0 +1,387 @@
+// main.js — Veliance: invisible, hotkey-driven AI overlay
+const {
+  app, BrowserWindow, globalShortcut, ipcMain, screen, desktopCapturer,
+  session, systemPreferences, Tray, Menu, nativeImage, shell
+} = require('electron');
+const path = require('path');
+const store = require('./store');
+const ai = require('./ai');
+
+const IS_MAC = process.platform === 'darwin';
+const DEV = process.argv.includes('--dev');
+
+const WIN_W = 640;
+const WIN_H = 640;
+const MOVE_STEP = 40;
+
+let win = null;
+let tray = null;
+let visible = true;
+let currentAbort = null;
+
+// Single instance — a second launch just reveals the existing overlay
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => showOverlay());
+}
+
+// Keep the app out of the Dock on macOS (LSUIElement-style agent app)
+if (IS_MAC) app.dock?.hide();
+
+
+function startPosition() {
+  const saved = store.get('position');
+  const display = screen.getPrimaryDisplay();
+  const { x, y, width } = display.workArea;
+  if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+    // make sure it's still on some display
+    const onScreen = screen.getAllDisplays().some(d =>
+      saved.x >= d.bounds.x - WIN_W + 80 && saved.x <= d.bounds.x + d.bounds.width - 80 &&
+      saved.y >= d.bounds.y - 20 && saved.y <= d.bounds.y + d.bounds.height - 60);
+    if (onScreen) return saved;
+  }
+  return { x: Math.round(x + (width - WIN_W) / 2), y: y + 8 };
+}
+
+function createWindow() {
+  const pos = startPosition();
+
+  win = new BrowserWindow({
+    width: WIN_W,
+    height: WIN_H,
+    x: pos.x,
+    y: pos.y,
+    show: false,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    focusable: true,
+    // NSPanel on macOS: floats above full-screen apps and doesn't steal Space focus
+    ...(IS_MAC ? { type: 'panel' } : {}),
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+      spellcheck: false
+    }
+  });
+
+  // ---- Invisibility ----------------------------------------------------
+  // Excludes the window from screen capture at the OS level:
+  //   macOS  -> NSWindowSharingNone   (Zoom, Meet, Teams, QuickTime, screenshots)
+  //   Windows-> WDA_EXCLUDEFROMCAPTURE
+  win.setContentProtection(true);
+  // Above everything, including other always-on-top windows
+  win.setAlwaysOnTop(true, 'screen-saver', 1);
+  // Follow the user across Spaces and over full-screen apps
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+  if (IS_MAC && typeof win.setHiddenInMissionControl === 'function') win.setHiddenInMissionControl(true);
+  if (IS_MAC && typeof win.setWindowButtonVisibility === 'function') win.setWindowButtonVisibility(false);
+  // Let clicks fall through the transparent parts; renderer flips this when hovering UI
+  win.setIgnoreMouseEvents(true, { forward: true });
+
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  win.once('ready-to-show', () => {
+    win.show();
+    win.setOpacity(Number(store.get('opacity')) || 1);
+    if (DEV) win.webContents.openDevTools({ mode: 'detach' });
+  });
+
+  win.on('closed', () => { win = null; });
+
+  // Re-apply protection if macOS ever drops it after a display change
+  screen.on('display-metrics-changed', () => { if (win) win.setContentProtection(true); });
+}
+
+// ---- Show / hide ---------------------------------------------------------
+function hideOverlay() {
+  if (!win) return;
+  visible = false;
+  win.webContents.send('overlay:visibility', false);
+  setTimeout(() => { if (win && !visible) win.hide(); }, 120);
+}
+function showOverlay() {
+  if (!win) return;
+  visible = true;
+  win.show();
+  win.webContents.send('overlay:visibility', true);
+}
+function toggleOverlay() { visible ? hideOverlay() : showOverlay(); }
+
+function moveBy(dx, dy) {
+  if (!win) return;
+  const [x, y] = win.getPosition();
+  const nx = x + dx, ny = y + dy;
+  win.setPosition(nx, ny, true);
+  store.set({ position: { x: nx, y: ny } });
+}
+
+function sendHotkey(name) {
+  if (!win) return;
+  if (!visible) showOverlay();
+  if (name === 'ask') win.focus();
+  win.webContents.send('hotkey', name);
+}
+
+// ---- Global shortcuts (user-configurable) --------------------------------
+const ACTIONS = [
+  { id: 'toggle',     accel: 'CommandOrControl+\\',          label: 'Show / hide overlay',            run: () => toggleOverlay() },
+  { id: 'ask',        accel: 'CommandOrControl+Enter',       label: 'Ask / answer transcript',        run: () => sendHotkey('ask') },
+  { id: 'screenshot', accel: 'CommandOrControl+Shift+S',     label: 'Screenshot & answer',            run: () => sendHotkey('screenshot') },
+  { id: 'listen',     accel: 'CommandOrControl+Shift+L',     label: 'Start / stop Listen',            run: () => sendHotkey('listen') },
+  { id: 'clear',      accel: 'CommandOrControl+Shift+C',     label: 'Clear conversation',             run: () => sendHotkey('clear') },
+  { id: 'moveUp',     accel: 'CommandOrControl+Shift+Up',    label: 'Move overlay up',                run: () => moveBy(0, -MOVE_STEP) },
+  { id: 'moveDown',   accel: 'CommandOrControl+Shift+Down',  label: 'Move overlay down',              run: () => moveBy(0, MOVE_STEP) },
+  { id: 'moveLeft',   accel: 'CommandOrControl+Shift+Left',  label: 'Move overlay left',              run: () => moveBy(-MOVE_STEP, 0) },
+  { id: 'moveRight',  accel: 'CommandOrControl+Shift+Right', label: 'Move overlay right',             run: () => moveBy(MOVE_STEP, 0) },
+  { id: 'quit',       accel: 'CommandOrControl+Shift+Q',     label: 'Quit Veliance',                  run: () => app.quit() }
+];
+let shortcutStatus = {};   // id -> 'ok' | 'failed' | 'off'
+
+function accelFor(a) {
+  const o = store.get('hotkeys') || {};
+  return Object.prototype.hasOwnProperty.call(o, a.id) ? o[a.id] : a.accel;
+}
+
+function registerShortcuts() {
+  globalShortcut.unregisterAll();
+  shortcutStatus = {};
+  for (const a of ACTIONS) {
+    const accel = accelFor(a);
+    if (!accel) { shortcutStatus[a.id] = 'off'; continue; }
+    try {
+      shortcutStatus[a.id] = globalShortcut.register(accel, a.run) ? 'ok' : 'failed';
+    } catch { shortcutStatus[a.id] = 'failed'; }
+  }
+  const failed = ACTIONS.filter(a => shortcutStatus[a.id] === 'failed').map(a => `${a.id} (${accelFor(a)})`);
+  if (failed.length) console.warn('[veliance] could not register shortcuts:', failed.join(', '));
+  if (tray) tray.setContextMenu(buildTrayMenu());
+}
+
+function hotkeyList() {
+  return ACTIONS.map(a => ({
+    id: a.id, label: a.label, accel: accelFor(a), default: a.accel,
+    status: shortcutStatus[a.id] || 'off',
+    custom: accelFor(a) !== a.accel
+  }));
+}
+
+// Returns null if valid, else an error string
+function validateAccel(accel) {
+  if (accel === '' || accel === null) return null;  // disabled
+  if (typeof accel !== 'string' || accel.length > 60) return 'bad accelerator';
+  const parts = accel.split('+');
+  const key = parts[parts.length - 1];
+  const mods = parts.slice(0, -1);
+  const okMods = ['Command', 'Cmd', 'Control', 'Ctrl', 'CommandOrControl', 'CmdOrCtrl', 'Alt', 'Option', 'AltGr', 'Shift', 'Super', 'Meta'];
+  if (!mods.every(m => okMods.includes(m))) return 'unknown modifier';
+  if (!key) return 'no key';
+  if (!mods.length && !/^F\d{1,2}$/.test(key)) return 'needs a modifier (⌘, ⌥, ⌃ or ⇧)';
+  return null;
+}
+
+function setHotkey(id, accel) {
+  const a = ACTIONS.find(x => x.id === id);
+  if (!a) throw new Error('unknown action');
+  const err = validateAccel(accel);
+  if (err) throw new Error(err);
+  const hot = { ...(store.get('hotkeys') || {}) };
+  if (accel === a.accel) delete hot[id]; else hot[id] = accel;
+  // one combo per action
+  if (accel) for (const other of ACTIONS) if (other.id !== id && accelFor(other) === accel) hot[other.id] = '';
+  store.set({ hotkeys: hot });
+  registerShortcuts();
+  return hotkeyList();
+}
+
+// ---- Tray (the only visible trace of the app) ----------------------------
+function buildTrayMenu() {
+  const acc = id => accelFor(ACTIONS.find(a => a.id === id)) || undefined;
+  return Menu.buildFromTemplate([
+    { label: 'Show / Hide Overlay', accelerator: acc('toggle'), click: toggleOverlay },
+    { label: 'Reset Position', click: () => { store.set({ position: null }); const p = startPosition(); win?.setPosition(p.x, p.y, true); } },
+    { type: 'separator' },
+    { label: 'Screen Recording permission…', click: () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'), visible: IS_MAC },
+    { label: 'Microphone permission…', click: () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'), visible: IS_MAC },
+    { type: 'separator' },
+    { label: 'Quit Veliance', accelerator: acc('quit'), click: () => app.quit() }
+  ]);
+}
+
+function createTray() {
+  try {
+    const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'trayTemplate.png'));
+    icon.setTemplateImage(true);
+    tray = new Tray(icon);
+    tray.setToolTip('Veliance');
+    tray.setContextMenu(buildTrayMenu());
+  } catch (e) {
+    console.warn('[veliance] tray unavailable:', e.message);
+  }
+}
+
+// ---- Screenshot ----------------------------------------------------------
+async function captureScreen() {
+  if (IS_MAC) {
+    const status = systemPreferences.getMediaAccessStatus('screen');
+    if (status !== 'granted') {
+      // Triggers the system prompt on first use; user must approve then relaunch
+      const err = new Error('Screen Recording permission needed. Enable Veliance (or Electron) under System Settings → Privacy & Security → Screen Recording, then relaunch.');
+      err.code = 'NO_SCREEN_PERMISSION';
+      // still attempt: on first launch this is what makes macOS show the dialog
+      desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } }).catch(() => {});
+      throw err;
+    }
+  }
+
+  const bounds = win ? win.getBounds() : screen.getPrimaryDisplay().bounds;
+  const display = screen.getDisplayMatching(bounds);
+  const scale = display.scaleFactor || 1;
+  const maxW = 1600;
+  const targetW = Math.min(display.size.width * scale, maxW);
+  const targetH = Math.round(targetW * (display.size.height / display.size.width));
+
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: targetW, height: targetH }
+  });
+  if (!sources.length) throw new Error('No screen sources found.');
+
+  const match = sources.find(s => String(s.display_id) === String(display.id)) || sources[0];
+  const img = match.thumbnail;
+  if (img.isEmpty()) throw new Error('Screen capture returned an empty image (permission?).');
+  return img.toPNG().toString('base64');
+}
+
+// ---- IPC -----------------------------------------------------------------
+function wireIpc() {
+  ipcMain.handle('settings:get', () => store.publicSettings());
+  ipcMain.handle('settings:set', (_e, patch) => {
+    const allowed = ['provider', 'anthropicModel', 'openaiModel', 'transcribeModel', 'systemPrompt', 'opacity', 'audioSource', 'listenChunkSeconds'];
+    const clean = {};
+    for (const k of allowed) if (k in patch) clean[k] = patch[k];
+    store.set(clean);
+    if ('opacity' in clean && win) win.setOpacity(Number(clean.opacity) || 1);
+    return store.publicSettings();
+  });
+  ipcMain.handle('settings:setKey', (_e, { name, value }) => {
+    if (!['anthropic', 'openai'].includes(name)) throw new Error('bad key name');
+    store.setKey(name, (value || '').trim());
+    return store.publicSettings();
+  });
+  ipcMain.handle('models:list', () => ai.listModels());
+  ipcMain.handle('settings:test', async (_e, provider) => {
+    await ai.testKey(provider);
+    return true;
+  });
+
+  ipcMain.handle('chat:send', async (e, { id, messages }) => {
+    if (currentAbort) currentAbort.abort();
+    const ctrl = new AbortController();
+    currentAbort = ctrl;
+    const wc = e.sender;
+    try {
+      const full = await ai.stream({
+        messages,
+        signal: ctrl.signal,
+        onDelta: d => { if (!wc.isDestroyed()) wc.send('chat:delta', { id, delta: d }); }
+      });
+      if (!wc.isDestroyed()) wc.send('chat:done', { id, text: full });
+      return full;
+    } catch (err) {
+      if (err.name === 'AbortError') { if (!wc.isDestroyed()) wc.send('chat:done', { id, text: null, aborted: true }); return null; }
+      if (!wc.isDestroyed()) wc.send('chat:error', { id, message: err.message, code: err.code });
+      return null;
+    } finally {
+      if (currentAbort === ctrl) currentAbort = null;
+    }
+  });
+  ipcMain.handle('chat:abort', () => { currentAbort?.abort(); return true; });
+
+  ipcMain.handle('screenshot:capture', () => captureScreen());
+
+  ipcMain.handle('audio:transcribe', async (_e, { buffer, mime }) => {
+    return ai.transcribe(Buffer.from(buffer), mime);
+  });
+
+  ipcMain.handle('window:setIgnoreMouse', (_e, ignore) => {
+    if (!win) return;
+    win.setIgnoreMouseEvents(Boolean(ignore), { forward: true });
+  });
+  ipcMain.handle('window:hide', () => hideOverlay());
+  ipcMain.handle('window:quit', () => app.quit());
+  ipcMain.handle('window:openExternal', (_e, url) => {
+    if (/^https:\/\//.test(url)) shell.openExternal(url);
+  });
+  ipcMain.handle('window:dragBy', (_e, { dx, dy }) => {
+    if (!win) return;
+    const [x, y] = win.getPosition();
+    win.setPosition(Math.round(x + dx), Math.round(y + dy), false);
+  });
+  ipcMain.handle('window:dragEnd', () => {
+    if (!win) return;
+    const [x, y] = win.getPosition();
+    store.set({ position: { x, y } });
+  });
+  ipcMain.handle('hotkeys:list', () => hotkeyList());
+  ipcMain.handle('hotkeys:set', (_e, { id, accel }) => setHotkey(id, accel));
+  ipcMain.handle('hotkeys:reset', () => { store.set({ hotkeys: {} }); registerShortcuts(); return hotkeyList(); });
+  // while the user is recording a new combo, nothing global should fire
+  ipcMain.handle('hotkeys:suspend', () => { globalShortcut.unregisterAll(); return true; });
+  ipcMain.handle('hotkeys:resume', () => { registerShortcuts(); return hotkeyList(); });
+  ipcMain.handle('perm:status', () => ({
+    screen: IS_MAC ? systemPreferences.getMediaAccessStatus('screen') : 'granted',
+    mic: IS_MAC ? systemPreferences.getMediaAccessStatus('microphone') : 'granted'
+  }));
+  ipcMain.handle('perm:askMic', async () => {
+    if (!IS_MAC) return true;
+    return systemPreferences.askForMediaAccess('microphone');
+  });
+}
+
+// ---- Media (Listen mode) -------------------------------------------------
+function wireMedia() {
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((_wc, permission, cb) => {
+    cb(['media', 'display-capture', 'audioCapture'].includes(permission));
+  });
+  // getDisplayMedia -> hand back the screen the overlay is on, with system audio loopback
+  ses.setDisplayMediaRequestHandler(async (_req, cb) => {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } });
+      const bounds = win ? win.getBounds() : screen.getPrimaryDisplay().bounds;
+      const display = screen.getDisplayMatching(bounds);
+      const src = sources.find(s => String(s.display_id) === String(display.id)) || sources[0];
+      cb({ video: src, audio: 'loopback' });
+    } catch (e) {
+      console.warn('[veliance] display media failed:', e.message);
+      cb({});
+    }
+  }, { useSystemPicker: false });
+}
+
+// ---- Lifecycle -----------------------------------------------------------
+app.whenReady().then(() => {
+  wireMedia();
+  wireIpc();
+  createWindow();
+  registerShortcuts();
+  createTray();
+
+  app.on('activate', () => { if (!win) createWindow(); else showOverlay(); });
+});
+
+app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('window-all-closed', () => { /* stay alive in the tray */ });

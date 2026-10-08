@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>LSUIElement</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Veliance uses the microphone for live transcription in Listen mode.</string>
+  <key>NSScreenCaptureUsageDescription</key><string>Veliance captures your screen so you can ask questions about what is on it.</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>

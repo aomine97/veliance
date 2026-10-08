@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:;" />
+  <title>Veliance</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="stage" class="stage">
+
+    <!-- ===== Command bar ===== -->
+    <div id="bar" class="bar hit">
+      <div id="grip" class="grip" title="Drag to move">
+        <span></span><span></span><span></span>
+      </div>
+
+      <button id="btnListen" class="pill" title="Listen to the room and transcribe live (⌘⇧L)">
+        <span class="dot"></span>
+        <span class="lbl">Listen</span>
+        <span class="waves" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      </button>
+
+      <button id="btnAsk" class="pill primary" title="Ask (⌘↵)">
+        <span class="lbl">Ask</span>
+        <kbd data-hk="ask">⌘↵</kbd>
+      </button>
+
+      <button id="btnShot" class="pill" title="Screenshot &amp; answer what's on screen (⌘⇧S)">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2"/><circle cx="12" cy="12" r="3.5"/></svg>
+        <kbd data-hk="screenshot">⌘⇧S</kbd>
+      </button>
+
+      <!-- custom dropdown on purpose: native <select> menus are separate OS windows and would show up in screen share -->
+      <div id="modelPick" class="mpick">
+        <button id="mpBtn" class="pill mp-btn" title="Switch model" aria-haspopup="listbox" aria-expanded="false">
+          <span id="mpProv" class="mp-prov"></span>
+          <span id="mpLabel" class="lbl">Model</span>
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div id="mpMenu" class="mp-menu hidden" role="listbox"></div>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div id="status" class="status" aria-live="polite"></div>
+
+      <button id="btnHide" class="icon" title="Hide (⌘\)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.9 5.1A10.5 10.5 0 0 1 12 5c5 0 9 4 10 7-.4 1.1-1.1 2.3-2.1 3.3M6.3 6.3C4.2 7.7 2.7 9.6 2 12c1 3 5 7 10 7 1.6 0 3.1-.4 4.4-1"/></svg>
+      </button>
+      <button id="btnSettings" class="icon" title="Settings">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </div>
+
+    <!-- ===== Main panel ===== -->
+    <section id="panel" class="panel hit hidden">
+
+      <div id="transcriptStrip" class="transcript hidden">
+        <div class="t-head">
+          <span class="live"><i></i> LIVE</span>
+          <span id="tSource" class="t-src">system audio</span>
+          <span class="spacer"></span>
+          <button id="btnAnswer" class="mini primary" title="Answer the latest question in the transcript (⌘↵)">Answer ⌘↵</button>
+          <button id="btnClearT" class="mini" title="Clear transcript">Clear</button>
+        </div>
+        <div id="transcript" class="t-body" data-placeholder="Listening… speech will appear here."></div>
+      </div>
+
+      <div id="thread" class="thread"></div>
+
+      <div class="composer">
+        <label id="shotChip" class="chip hidden" title="A screenshot will be attached to your next message">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg>
+          screen attached
+          <button id="shotRemove" type="button" aria-label="Remove screenshot">×</button>
+        </label>
+        <div class="row">
+          <textarea id="input" rows="1" placeholder="Ask anything… (⌘↵ to send · ⌘⇧S to add your screen)"></textarea>
+          <button id="btnStop" class="send stop hidden" title="Stop">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          </button>
+          <button id="btnSend" class="send" title="Send (⌘↵)">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Settings ===== -->
+    <section id="settings" class="panel settings hit hidden">
+      <div class="s-head">
+        <strong>Settings</strong>
+        <span id="encBadge" class="badge">keys encrypted</span>
+        <span class="spacer"></span>
+        <button id="btnCloseSettings" class="icon" title="Back">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+
+      <div class="s-body">
+        <div class="field">
+          <label>Answer with</label>
+          <div class="seg" id="providerSeg">
+            <button data-v="anthropic">Anthropic</button>
+            <button data-v="openai">OpenAI</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Anthropic API key <span id="anthState" class="state"></span></label>
+          <div class="keyrow">
+            <input id="anthKey" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+            <button id="anthSave" class="mini primary">Save</button>
+            <button id="anthTest" class="mini">Test</button>
+          </div>
+          <input id="anthModel" class="model" placeholder="model, e.g. claude-sonnet-4-5" spellcheck="false" />
+        </div>
+
+        <div class="field">
+          <label>OpenAI API key <span id="oaiState" class="state"></span> <em>(also used for Listen transcription)</em></label>
+          <div class="keyrow">
+            <input id="oaiKey" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+            <button id="oaiSave" class="mini primary">Save</button>
+            <button id="oaiTest" class="mini">Test</button>
+          </div>
+          <div class="two">
+            <input id="oaiModel" class="model" placeholder="chat model, e.g. gpt-4o" spellcheck="false" />
+            <input id="trModel" class="model" placeholder="transcribe model, e.g. gpt-4o-mini-transcribe" spellcheck="false" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Listen source</label>
+          <div class="seg" id="audioSeg">
+            <button data-v="system">System audio (calls, videos)</button>
+            <button data-v="mic">Microphone</button>
+          </div>
+          <div class="hint" id="permHint"></div>
+        </div>
+
+        <div class="field">
+          <label>Overlay opacity <span id="opacityVal" class="state"></span></label>
+          <input id="opacity" type="range" min="0.5" max="1" step="0.02" />
+        </div>
+
+        <div class="field">
+          <label>System prompt</label>
+          <textarea id="sysPrompt" rows="4" spellcheck="false"></textarea>
+        </div>
+
+        <div class="field">
+          <label class="lrow">Hotkeys <em>click a combo, press the new keys · Esc cancels · ⌫ disables</em>
+            <span class="spacer"></span>
+            <button id="hkReset" class="mini" type="button">Reset all</button>
+          </label>
+          <ul id="hotkeyList" class="hotkeys"></ul>
+          <div id="hkMsg" class="hint"></div>
+        </div>
+
+        <div class="field foot">
+          <span class="hint">Hidden from screen share, recordings and screenshots via OS content protection. Not in the Dock, Mission Control or ⌘-Tab.</span>
+          <button id="btnQuit" class="mini danger">Quit Veliance</button>
+        </div>
+      </div>
+    </section>
+
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
