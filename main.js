@@ -71,38 +71,64 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       backgroundThrottling: false,
       spellcheck: false
     }
   });
 
   // ---- Invisibility ----------------------------------------------------
-  // Excludes the window from screen capture at the OS level:
-  //   macOS  -> NSWindowSharingNone   (Zoom, Meet, Teams, QuickTime, screenshots)
-  //   Windows-> WDA_EXCLUDEFROMCAPTURE
-  win.setContentProtection(true);
-  // Above everything, including other always-on-top windows
-  win.setAlwaysOnTop(true, 'screen-saver', 1);
-  // Follow the user across Spaces and over full-screen apps
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
-  if (IS_MAC && typeof win.setHiddenInMissionControl === 'function') win.setHiddenInMissionControl(true);
-  if (IS_MAC && typeof win.setWindowButtonVisibility === 'function') win.setWindowButtonVisibility(false);
-  // Let clicks fall through the transparent parts; renderer flips this when hovering UI
+  applyInvisibility(win);
+  // Let clicks fall through the transparent parts; renderer flips this when hovering UI.
+  // Kept out of applyInvisibility() so re-asserts don't clobber the renderer's hover state.
   win.setIgnoreMouseEvents(true, { forward: true });
+
+  // ---- Navigation lockdown --------------------------------------------
+  // The overlay only ever shows its local renderer. Block any attempt to
+  // navigate elsewhere or spawn a new window (a new window would not inherit
+  // content protection, so it could leak into screen capture). External links
+  // are routed through the vetted https-only window:openExternal handler.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\//.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (e, url) => {
+    if (url !== win.webContents.getURL()) e.preventDefault();
+  });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   win.once('ready-to-show', () => {
     win.show();
+    applyInvisibility(win);   // macOS can drop these the first time a panel is shown
     win.setOpacity(Number(store.get('opacity')) || 1);
     if (DEV) win.webContents.openDevTools({ mode: 'detach' });
   });
 
+  // Re-assert every time the panel is shown again (across Spaces / after hide)
+  win.on('show', () => applyInvisibility(win));
+
   win.on('closed', () => { win = null; });
 
-  // Re-apply protection if macOS ever drops it after a display change
-  screen.on('display-metrics-changed', () => { if (win) win.setContentProtection(true); });
+  // Re-apply if macOS ever drops the flags after a display change
+  screen.on('display-metrics-changed', () => applyInvisibility(win));
+}
+
+// Re-assert the OS-level invisibility flags. macOS occasionally drops these on
+// `panel`-type windows when they move across Spaces, re-show, or the display
+// layout changes, so this runs at creation and on every show / display change.
+function applyInvisibility(w) {
+  if (!w || w.isDestroyed()) return;
+  // Exclude from screen capture:
+  //   macOS  -> NSWindowSharingNone   (Zoom, Meet, Teams, QuickTime, screenshots)
+  //   Windows-> WDA_EXCLUDEFROMCAPTURE
+  w.setContentProtection(true);
+  // Above everything, incl. other always-on-top windows (NSWindow maximumWindowLevel)
+  w.setAlwaysOnTop(true, 'screen-saver', 1);
+  // Float across all Spaces and over full-screen apps (canJoinAllSpaces | fullScreenAuxiliary)
+  w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+  if (IS_MAC && typeof w.setHiddenInMissionControl === 'function') w.setHiddenInMissionControl(true);
+  if (IS_MAC && typeof w.setWindowButtonVisibility === 'function') w.setWindowButtonVisibility(false);
 }
 
 // ---- Show / hide ---------------------------------------------------------
