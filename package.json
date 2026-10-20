@@ -1,7 +1,7 @@
 {
   "name": "veliance",
   "productName": "Veliance",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Invisible AI overlay for your desktop. Hidden from screen share, driven by hotkeys, powered by your own API key.",
   "main": "main.js",
   "private": true,
