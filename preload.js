@@ -45,5 +45,10 @@ contextBridge.exposeInMainWorld('veliance', {
     status: () => ipcRenderer.invoke('perm:status'),
     askMic: () => ipcRenderer.invoke('perm:askMic')
   },
+  update: {
+    version: () => ipcRenderer.invoke('app:version'),
+    check: () => ipcRenderer.invoke('update:check'),
+    open: url => ipcRenderer.invoke('update:open', url)
+  },
   platform: process.platform
 });

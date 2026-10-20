@@ -1,7 +1,7 @@
 // main.js — Veliance: invisible, hotkey-driven AI overlay
 const {
   app, BrowserWindow, globalShortcut, ipcMain, screen, desktopCapturer,
-  session, systemPreferences, Tray, Menu, nativeImage, shell
+  session, systemPreferences, Tray, Menu, nativeImage, shell, net
 } = require('electron');
 const path = require('path');
 const store = require('./store');
@@ -10,9 +10,17 @@ const ai = require('./ai');
 const IS_MAC = process.platform === 'darwin';
 const DEV = process.argv.includes('--dev');
 
-const WIN_W = 640;
+const WIN_W = 640;          // default overlay width/height
 const WIN_H = 640;
+const WIN_MIN = 420;        // smallest the overlay shrinks to
+const WIN_MAX = 1100;       // largest it grows to
+const SIZE_STEP = 60;       // px added/removed per Grow/Shrink keypress
 const MOVE_STEP = 40;
+
+// Where published builds live, for the in-app updater
+const REPO = 'aomine97/veliance';
+
+function clampSize(n) { return Math.max(WIN_MIN, Math.min(WIN_MAX, Math.round(n))); }
 
 let win = null;
 let tray = null;
@@ -44,12 +52,21 @@ function startPosition() {
   return { x: Math.round(x + (width - WIN_W) / 2), y: y + 8 };
 }
 
+function startSize() {
+  const saved = store.get('size');
+  if (saved && Number.isFinite(saved.w) && Number.isFinite(saved.h)) {
+    return { w: clampSize(saved.w), h: clampSize(saved.h) };
+  }
+  return { w: WIN_W, h: WIN_H };
+}
+
 function createWindow() {
   const pos = startPosition();
+  const size = startSize();
 
   win = new BrowserWindow({
-    width: WIN_W,
-    height: WIN_H,
+    width: size.w,
+    height: size.h,
     x: pos.x,
     y: pos.y,
     show: false,
@@ -154,6 +171,21 @@ function moveBy(dx, dy) {
   store.set({ position: { x: nx, y: ny } });
 }
 
+// Grow / shrink the overlay by a fixed step, clamped, keeping it centered on
+// its current spot. Size persists between launches (store.size).
+function resizeBy(delta) {
+  if (!win) return;
+  const b = win.getBounds();
+  const w = clampSize(b.width + delta);
+  const h = clampSize(b.height + delta);
+  if (w === b.width && h === b.height) return;   // already at the limit
+  const x = Math.round(b.x + (b.width - w) / 2);
+  const y = Math.round(b.y + (b.height - h) / 2);
+  win.setBounds({ x, y, width: w, height: h }, true);
+  store.set({ size: { w, h }, position: { x, y } });
+  applyInvisibility(win);   // macOS can drop the capture-protection flags on a resize
+}
+
 function sendHotkey(name) {
   if (!win) return;
   if (!visible) showOverlay();
@@ -172,6 +204,8 @@ const ACTIONS = [
   { id: 'moveDown',   accel: 'CommandOrControl+Shift+Down',  label: 'Move overlay down',              run: () => moveBy(0, MOVE_STEP) },
   { id: 'moveLeft',   accel: 'CommandOrControl+Shift+Left',  label: 'Move overlay left',              run: () => moveBy(-MOVE_STEP, 0) },
   { id: 'moveRight',  accel: 'CommandOrControl+Shift+Right', label: 'Move overlay right',             run: () => moveBy(MOVE_STEP, 0) },
+  { id: 'grow',       accel: 'CommandOrControl+=',           label: 'Grow overlay',                   run: () => resizeBy(SIZE_STEP) },
+  { id: 'shrink',     accel: 'CommandOrControl+-',           label: 'Shrink overlay',                 run: () => resizeBy(-SIZE_STEP) },
   { id: 'quit',       accel: 'CommandOrControl+Shift+Q',     label: 'Quit Veliance',                  run: () => app.quit() }
 ];
 let shortcutStatus = {};   // id -> 'ok' | 'failed' | 'off'
@@ -238,6 +272,13 @@ function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: 'Show / Hide Overlay', accelerator: acc('toggle'), click: toggleOverlay },
     { label: 'Reset Position', click: () => { store.set({ position: null }); const p = startPosition(); win?.setPosition(p.x, p.y, true); } },
+    { label: 'Reset Size', click: () => { store.set({ size: null }); win?.setSize(WIN_W, WIN_H, true); if (win) applyInvisibility(win); } },
+    { type: 'separator' },
+    { label: 'Check for Updates…', click: async () => {
+      const info = await checkForUpdate();
+      if (info.hasUpdate) shell.openExternal(info.url);
+      else shell.openExternal(`https://github.com/${REPO}/releases/latest`);
+    } },
     { type: 'separator' },
     { label: 'Screen Recording permission…', click: () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'), visible: IS_MAC },
     { label: 'Microphone permission…', click: () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'), visible: IS_MAC },
@@ -289,6 +330,64 @@ async function captureScreen() {
   const img = match.thumbnail;
   if (img.isEmpty()) throw new Error('Screen capture returned an empty image (permission?).');
   return img.toPNG().toString('base64');
+}
+
+// ---- Updates -------------------------------------------------------------
+// Veliance ships as an ad-hoc-signed DMG (no Apple Developer ID), so Squirrel
+// auto-install isn't available. Instead we check GitHub Releases for a newer
+// version and hand the user the right DMG to drag over — same flow as a fresh
+// install, one click from Settings. Builds are published by the release
+// workflow (.github/workflows/release.yml) on every `v*` tag.
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    const req = net.request({ url, headers: { 'User-Agent': 'Veliance-Updater', 'Accept': 'application/vnd.github+json' } });
+    let body = '';
+    req.on('response', res => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.on('data', () => {});
+        res.on('end', () => reject(new Error('GitHub returned HTTP ' + res.statusCode)));
+        return;
+      }
+      res.on('data', c => { body += c; });
+      res.on('end', () => { try { resolve(JSON.parse(body)); } catch (e) { reject(e); } });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// >0 when a is newer than b. Tolerates a leading "v" and missing segments.
+function compareVersions(a, b) {
+  const pa = String(a).replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b).replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+async function checkForUpdate() {
+  const current = app.getVersion();
+  const fallback = `https://github.com/${REPO}/releases/latest`;
+  try {
+    const rel = await fetchJson(`https://api.github.com/repos/${REPO}/releases/latest`);
+    const latest = (rel.tag_name || '').replace(/^v/i, '');
+    if (!latest) return { current, latest: null, hasUpdate: false, url: fallback };
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    const assets = Array.isArray(rel.assets) ? rel.assets : [];
+    const asset = assets.find(a => a.name && a.name.includes(arch) && a.name.endsWith('.dmg'))
+               || assets.find(a => a.name && a.name.endsWith('.dmg'));
+    return {
+      current,
+      latest,
+      hasUpdate: compareVersions(latest, current) > 0,
+      url: (asset && asset.browser_download_url) || rel.html_url || fallback,
+      notes: rel.name || rel.tag_name || ''
+    };
+  } catch (e) {
+    return { current, latest: null, hasUpdate: false, error: e.message, url: fallback };
+  }
 }
 
 // ---- IPC -----------------------------------------------------------------
@@ -374,6 +473,12 @@ function wireIpc() {
   ipcMain.handle('perm:askMic', async () => {
     if (!IS_MAC) return true;
     return systemPreferences.askForMediaAccess('microphone');
+  });
+
+  ipcMain.handle('app:version', () => app.getVersion());
+  ipcMain.handle('update:check', () => checkForUpdate());
+  ipcMain.handle('update:open', (_e, url) => {
+    if (typeof url === 'string' && /^https:\/\//.test(url)) shell.openExternal(url);
   });
 }
 

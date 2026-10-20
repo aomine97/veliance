@@ -319,3 +319,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .mp-item.on { color: var(--fg); font-weight: 550; }
 .mp-item.on .ck { visibility: visible; }
 .mp-item.dim { opacity: .5; }
+
+/* updates row (Settings) */
+.updrow { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.updrow .hint { margin: 0; flex: 1; min-width: 0; }

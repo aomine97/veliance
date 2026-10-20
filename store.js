@@ -17,6 +17,7 @@ const DEFAULTS = {
     'or suggest the best next thing to say. Use short paragraphs and tight bullet lists. No filler.',
   opacity: 0.96,
   position: null,                   // {x,y} remembered between launches
+  size: null,                       // {w,h} overlay size (Grow/Shrink hotkeys)
   audioSource: 'system',            // 'system' | 'mic'
   listenChunkSeconds: 6,
   hotkeys: {},                      // action -> accelerator overrides

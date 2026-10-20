@@ -56,11 +56,23 @@ The tray menu (top-right menu bar icon) has shortcuts to both settings panes.
 | ⌘ ⇧ L | Start / stop Listen |
 | ⌘ ⇧ C | Clear the conversation |
 | ⌘ ⇧ ↑ ↓ ← → | Nudge the overlay |
+| ⌘ = / ⌘ - | Grow / shrink the overlay |
 | ⌘ ⇧ Q | Quit |
 
 All of these are editable: Settings → Hotkeys → click a combo → press the new keys. Esc cancels, ⌫ disables that hotkey, **Reset all** restores defaults. Combos already owned by another app or macOS show in amber and won't fire; pick another.
 
-Drag the grip on the left of the bar to move it. Position, opacity, hotkeys and settings persist between launches.
+Drag the grip on the left of the bar to move it. Position, size, opacity, hotkeys and settings persist between launches.
+
+## Updating
+
+**Settings → Updates → Check for updates** (or the tray menu's *Check for Updates…*) asks GitHub for the latest release and, if there's a newer version, offers to download the right DMG for your Mac (arm64 / x64). Drag it over the old **Veliance** in Applications as usual. Veliance also checks once, quietly, on launch and shows a note if an update is waiting.
+
+Releases are built automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml): bump the version and push a tag and the workflow builds both DMGs and publishes them.
+
+```bash
+npm version 2.1.0      # bumps package.json and creates the v2.1.0 tag
+git push --follow-tags # the Release workflow builds + publishes the DMGs
+```
 
 ## How the hiding works
 

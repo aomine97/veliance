@@ -18,6 +18,7 @@
     oaiKey: $('oaiKey'), oaiSave: $('oaiSave'), oaiTest: $('oaiTest'), oaiState: $('oaiState'), oaiModel: $('oaiModel'), trModel: $('trModel'),
     permHint: $('permHint'), opacity: $('opacity'), opacityVal: $('opacityVal'), sysPrompt: $('sysPrompt'),
     hotkeyList: $('hotkeyList'), hkReset: $('hkReset'), hkMsg: $('hkMsg'), btnQuit: $('btnQuit'),
+    verState: $('verState'), btnCheckUpdate: $('btnCheckUpdate'), updMsg: $('updMsg'), btnGetUpdate: $('btnGetUpdate'),
     mpBtn: $('mpBtn'), mpProv: $('mpProv'), mpLabel: $('mpLabel'), mpMenu: $('mpMenu')
   };
 
@@ -45,16 +46,34 @@
   }
 
   // ---------- click-through management ----------
+  // The window is pass-through by default — main launches it with
+  // setIgnoreMouseEvents(true, { forward:true }), so clicks fall through to
+  // whatever sits behind the overlay. We flip it interactive only while the
+  // pointer is over the UI (.hit regions) OR while a text field is focused, so
+  // the composer stays usable: the caret lands when you click in, and your
+  // keystrokes are never dropped if the pointer wanders off the panel.
   let ignoring = true;
   function setIgnore(v) {
     if (v === ignoring) return;
     ignoring = v;
     V.window.setIgnoreMouse(v);
   }
-  document.addEventListener('mousemove', e => {
-    setIgnore(!e.target.closest('.hit'));
-  });
-  document.addEventListener('mouseleave', () => setIgnore(true));
+  const overHit = t => !!(t && t.closest && t.closest('.hit'));
+  const editing = () => {
+    const a = document.activeElement;
+    return !!a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT' || a.isContentEditable);
+  };
+  // Interactive whenever the pointer is on the UI or a field has focus; otherwise pass-through.
+  const refreshIgnore = target => setIgnore(!(overHit(target) || editing()));
+
+  document.addEventListener('mousemove', e => refreshIgnore(e.target));
+  document.addEventListener('mouseleave', () => refreshIgnore(null));
+  // Clicking into a field must hold the window interactive so the caret lands
+  // and typing works; leaving the field hands pass-through back.
+  document.addEventListener('focusin', () => { if (editing()) setIgnore(false); });
+  document.addEventListener('focusout', () => setTimeout(() => refreshIgnore(null), 0));
+  // If the overlay loses focus entirely, return to pass-through.
+  window.addEventListener('blur', () => setIgnore(true));
   // Start interactive so the very first hover registers correctly
   setIgnore(false); setIgnore(true);
 
@@ -684,6 +703,33 @@
     el.hkMsg.textContent = 'Hotkeys reset to defaults.';
   });
 
+  // ---------- updates ----------
+  let latestUpdate = null;
+  async function checkUpdates({ silent = false } = {}) {
+    el.btnCheckUpdate.disabled = true;
+    if (!silent) el.updMsg.textContent = 'Checking…';
+    const info = await V.update.check();
+    el.btnCheckUpdate.disabled = false;
+    latestUpdate = info;
+    if (info.current) el.verState.textContent = 'v' + info.current;
+    if (info.error) {
+      el.btnGetUpdate.classList.add('hidden');
+      if (!silent) el.updMsg.textContent = 'Couldn’t check for updates: ' + info.error;
+      return info;
+    }
+    if (info.hasUpdate) {
+      el.updMsg.innerHTML = `Update available — <strong>v${info.latest}</strong> (you have v${info.current}).`;
+      el.btnGetUpdate.classList.remove('hidden');
+      if (silent) status('update available — see Settings', '', 6000);
+    } else {
+      el.btnGetUpdate.classList.add('hidden');
+      if (!silent) el.updMsg.textContent = `You’re on the latest version (v${info.current}).`;
+    }
+    return info;
+  }
+  el.btnCheckUpdate.addEventListener('click', () => checkUpdates());
+  el.btnGetUpdate.addEventListener('click', () => { if (latestUpdate && latestUpdate.url) V.update.open(latestUpdate.url); });
+
   // ---------- boot ----------
   (async () => {
     settings = await V.settings.get();
@@ -691,6 +737,8 @@
     renderHotkeys();
     refreshSettingsUI();
     loadModels();
+    V.update.version().then(v => { el.verState.textContent = 'v' + v; }).catch(() => {});
+    checkUpdates({ silent: true }).catch(() => {});
     if (!settings.hasAnthropicKey && !settings.hasOpenaiKey) {
       openSettings();
       status('add an API key to start', 'err');
