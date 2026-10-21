@@ -65,14 +65,36 @@ Drag the grip on the left of the bar to move it. Position, size, opacity, hotkey
 
 ## Updating
 
-**Settings → Updates → Check for updates** (or the tray menu's *Check for Updates…*) asks GitHub for the latest release and, if there's a newer version, offers to download the right DMG for your Mac (arm64 / x64). Drag it over the old **Veliance** in Applications as usual. Veliance also checks once, quietly, on launch and shows a note if an update is waiting.
+**Settings → Updates → Check for updates** (or the tray menu's *Check for Updates…*) looks for a newer release. Veliance also checks once, quietly, on launch.
 
-Releases are built automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml): bump the version and push a tag and the workflow builds both DMGs and publishes them.
+- **Signed, notarized builds** (the release pipeline below) update **in place**: *Download & install* downloads in the background, then *Restart to update* swaps in the new version — no dragging. This runs through `electron-updater` / Squirrel.Mac.
+- **Dev or ad-hoc builds** can't auto-install (no Developer ID signature), so the button opens the DMG to drag over Applications, same as a fresh install.
+
+### Releasing (signed + notarized)
+
+Releases are built, Developer ID-signed, Apple-notarized, and published by [`.github/workflows/release.yml`](.github/workflows/release.yml) on a version tag:
 
 ```bash
-npm version 2.1.0      # bumps package.json and creates the v2.1.0 tag
-git push --follow-tags # the Release workflow builds + publishes the DMGs
+npm version 2.2.0      # bumps package.json and creates the v2.2.0 tag
+git push --follow-tags # the Release workflow builds, signs, notarizes + publishes
 ```
+
+It produces a DMG + ZIP per arch plus `latest-mac.yml` (the feed the in-app updater reads) and attaches them to the GitHub Release.
+
+Add these repo secrets first (**Settings → Secrets and variables → Actions**):
+
+| Secret | What it is |
+|---|---|
+| `MAC_CERT_P12_BASE64` | base64 of your *Developer ID Application* certificate exported as `.p12` (`base64 -i cert.p12 \| pbcopy`) |
+| `MAC_CERT_PASSWORD` | the password you set when exporting that `.p12` |
+| `APPLE_API_KEY_P8` | contents of your App Store Connect API key (`.p8`) — Keys → generate one with *Developer* access |
+| `APPLE_API_KEY_ID` | that key's Key ID |
+| `APPLE_API_ISSUER` | the API key's Issuer ID (shown above the keys list) |
+| `APPLE_TEAM_ID` | your 10-char Apple Developer Team ID |
+
+(Prefer an Apple ID + app-specific password instead of the API key? Set `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` and tweak the `env` block in the workflow — `electron-builder` accepts either.)
+
+Once a signed `v2.2.0+` release is out, everyone on that version and later updates one-click from inside the app. Users still on an older, ad-hoc 2.x build take the manual DMG path once to cross over.
 
 ## How the hiding works
 

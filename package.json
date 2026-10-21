@@ -9,6 +9,7 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "dist": "electron-builder --mac --publish never",
+    "release": "electron-builder --mac --publish always",
     "pack": "node scripts/pack.js",
     "pack:intel": "node scripts/pack.js x64",
     "dmg": "node scripts/pack.js arm64 --dmg && node scripts/pack.js x64 --dmg",
@@ -22,12 +23,24 @@
   "build": {
     "appId": "com.veliance.overlay",
     "productName": "Veliance",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "aomine97",
+        "repo": "veliance",
+        "releaseType": "release"
+      }
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
-        "dmg"
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
       ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
       "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
@@ -44,8 +57,11 @@
       "store.js",
       "renderer/**/*",
       "assets/**/*",
-      "build/**/*",
-      "scripts/**/*"
+      "build/entitlements.mac.plist",
+      "build/Info.extend.plist"
     ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

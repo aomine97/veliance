@@ -704,31 +704,73 @@
   });
 
   // ---------- updates ----------
+  // In a signed, packaged build the button downloads and installs in place
+  // (canInstall), then turns into "Restart to update". Dev / ad-hoc builds fall
+  // back to opening the DMG to drag over.
   let latestUpdate = null;
+  let updPhase = 'idle';   // 'idle' | 'downloading' | 'ready'
+
+  function setUpdateButton(label, { hidden = false, disabled = false } = {}) {
+    el.btnGetUpdate.textContent = label;
+    el.btnGetUpdate.classList.toggle('hidden', hidden);
+    el.btnGetUpdate.disabled = disabled;
+  }
+
   async function checkUpdates({ silent = false } = {}) {
     el.btnCheckUpdate.disabled = true;
     if (!silent) el.updMsg.textContent = 'Checking…';
     const info = await V.update.check();
     el.btnCheckUpdate.disabled = false;
     latestUpdate = info;
+    updPhase = 'idle';
     if (info.current) el.verState.textContent = 'v' + info.current;
     if (info.error) {
-      el.btnGetUpdate.classList.add('hidden');
+      setUpdateButton('Download update', { hidden: true });
       if (!silent) el.updMsg.textContent = 'Couldn’t check for updates: ' + info.error;
       return info;
     }
     if (info.hasUpdate) {
-      el.updMsg.innerHTML = `Update available — <strong>v${info.latest}</strong> (you have v${info.current}).`;
-      el.btnGetUpdate.classList.remove('hidden');
+      const note = info.note ? ` <em>(${info.note})</em>` : '';
+      el.updMsg.innerHTML = `Update available — <strong>v${info.latest}</strong> (you have v${info.current}).${note}`;
+      setUpdateButton(info.canInstall ? 'Download & install' : 'Download update');
       if (silent) status('update available — see Settings', '', 6000);
     } else {
-      el.btnGetUpdate.classList.add('hidden');
+      setUpdateButton('Download update', { hidden: true });
       if (!silent) el.updMsg.textContent = `You’re on the latest version (v${info.current}).`;
     }
     return info;
   }
+
+  async function startUpdate() {
+    if (!latestUpdate) return;
+    if (updPhase === 'ready') return V.update.install();   // quit & swap in the update
+    if (updPhase === 'downloading') return;
+    if (latestUpdate.canInstall) {
+      updPhase = 'downloading';
+      setUpdateButton('Downloading… 0%', { disabled: true });
+      await V.update.start();
+    } else {
+      await V.update.start();   // main opens the DMG
+      el.updMsg.innerHTML = 'Opening the download… drag <strong>Veliance</strong> into Applications to update.';
+    }
+  }
+
   el.btnCheckUpdate.addEventListener('click', () => checkUpdates());
-  el.btnGetUpdate.addEventListener('click', () => { if (latestUpdate && latestUpdate.url) V.update.open(latestUpdate.url); });
+  el.btnGetUpdate.addEventListener('click', startUpdate);
+  V.update.onProgress(p => {
+    updPhase = 'downloading';
+    setUpdateButton(`Downloading… ${p && p.percent != null ? p.percent : 0}%`, { disabled: true });
+  });
+  V.update.onDownloaded(info => {
+    updPhase = 'ready';
+    el.updMsg.innerHTML = `Update <strong>v${(info && info.version) || ''}</strong> downloaded.`;
+    setUpdateButton('Restart to update', { disabled: false });
+  });
+  V.update.onError(e => {
+    updPhase = 'idle';
+    el.updMsg.textContent = 'Update failed: ' + ((e && e.message) || 'unknown error');
+    setUpdateButton('Try again', { disabled: false });
+  });
 
   // ---------- boot ----------
   (async () => {

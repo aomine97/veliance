@@ -48,7 +48,12 @@ contextBridge.exposeInMainWorld('veliance', {
   update: {
     version: () => ipcRenderer.invoke('app:version'),
     check: () => ipcRenderer.invoke('update:check'),
-    open: url => ipcRenderer.invoke('update:open', url)
+    start: () => ipcRenderer.invoke('update:start'),
+    install: () => ipcRenderer.invoke('update:install'),
+    open: url => ipcRenderer.invoke('update:open', url),
+    onProgress: fn => on('update:progress', fn),
+    onDownloaded: fn => on('update:downloaded', fn),
+    onError: fn => on('update:error', fn)
   },
   platform: process.platform
 });

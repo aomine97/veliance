@@ -7,6 +7,12 @@ const path = require('path');
 const store = require('./store');
 const ai = require('./ai');
 
+// electron-updater drives the real one-click install (Squirrel.Mac) in signed,
+// packaged builds. Optional require so dev / ad-hoc runs never hard-fail if it
+// isn't present — those fall back to the lightweight GitHub check below.
+let autoUpdater = null;
+try { ({ autoUpdater } = require('electron-updater')); } catch { /* optional */ }
+
 const IS_MAC = process.platform === 'darwin';
 const DEV = process.argv.includes('--dev');
 
@@ -367,6 +373,20 @@ function compareVersions(a, b) {
   return 0;
 }
 
+// True only for a real, installed build — electron-updater can't verify a
+// code signature (and has no app-update.yml) when run from source or ad-hoc.
+function canAutoUpdate() { return !!autoUpdater && app.isPackaged; }
+
+function setupAutoUpdater() {
+  if (!autoUpdater) return;
+  autoUpdater.autoDownload = false;          // we ask before downloading
+  autoUpdater.autoInstallOnAppQuit = true;   // if they quit before restarting
+  const send = (ch, payload) => { if (win && !win.isDestroyed()) win.webContents.send(ch, payload); };
+  autoUpdater.on('download-progress', p => send('update:progress', { percent: Math.round(p.percent || 0) }));
+  autoUpdater.on('update-downloaded', info => send('update:downloaded', { version: info && info.version }));
+  autoUpdater.on('error', e => send('update:error', { message: String((e && e.message) || e) }));
+}
+
 async function checkForUpdate() {
   const current = app.getVersion();
   const fallback = `https://github.com/${REPO}/releases/latest`;
@@ -476,7 +496,46 @@ function wireIpc() {
   });
 
   ipcMain.handle('app:version', () => app.getVersion());
-  ipcMain.handle('update:check', () => checkForUpdate());
+
+  // Is there a newer version? In a signed/packaged build this asks
+  // electron-updater (so a later update:start can install in place); otherwise
+  // it uses the lightweight GitHub check and can only open the download.
+  ipcMain.handle('update:check', async () => {
+    const current = app.getVersion();
+    if (canAutoUpdate()) {
+      try {
+        const res = await autoUpdater.checkForUpdates();
+        const latest = (res && res.updateInfo && res.updateInfo.version) || null;
+        const hasUpdate = latest ? compareVersions(latest, current) > 0 : false;
+        return { current, latest, hasUpdate, canInstall: hasUpdate };
+      } catch (e) {
+        // signature / feed problem — degrade to the manual download path
+        const info = await checkForUpdate();
+        return { ...info, canInstall: false, note: 'auto-install unavailable (' + e.message + ')' };
+      }
+    }
+    const info = await checkForUpdate();
+    return { ...info, canInstall: false };
+  });
+
+  // Begin updating: download + in-place install when supported, else open the DMG.
+  ipcMain.handle('update:start', async () => {
+    if (canAutoUpdate()) {
+      autoUpdater.downloadUpdate().catch(e => {
+        if (win && !win.isDestroyed()) win.webContents.send('update:error', { message: e.message });
+      });
+      return { downloading: true };
+    }
+    const info = await checkForUpdate();
+    if (info.url) shell.openExternal(info.url);
+    return { downloading: false, opened: true };
+  });
+
+  // Quit and swap in the downloaded update (one-click restart).
+  ipcMain.handle('update:install', () => {
+    if (canAutoUpdate()) autoUpdater.quitAndInstall();
+  });
+
   ipcMain.handle('update:open', (_e, url) => {
     if (typeof url === 'string' && /^https:\/\//.test(url)) shell.openExternal(url);
   });
@@ -508,6 +567,7 @@ app.whenReady().then(() => {
   wireMedia();
   wireIpc();
   createWindow();
+  setupAutoUpdater();
   registerShortcuts();
   createTray();
 
